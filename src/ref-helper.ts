@@ -1,7 +1,8 @@
-import {URL} from 'url'
 import {IGitCommandManager} from './git-command-manager'
 import * as core from '@actions/core'
 import * as github from '@actions/github'
+import {getOctokit} from './octokit-provider'
+import {isGhes} from './url-helper'
 
 export const tagsRefSpec = '+refs/tags/*:refs/tags/*'
 
@@ -183,11 +184,12 @@ export async function checkCommitInfo(
   repositoryOwner: string,
   repositoryName: string,
   ref: string,
-  commit: string
+  commit: string,
+  baseUrl?: string
 ): Promise<void> {
   try {
     // GHES?
-    if (isGhes()) {
+    if (isGhes(baseUrl)) {
       return
     }
 
@@ -243,7 +245,8 @@ export async function checkCommitInfo(
       core.debug(
         `Expected head sha ${expectedHeadSha}; actual head sha ${actualHeadSha}`
       )
-      const octokit = new github.GitHub(token, {
+      const octokit = getOctokit(token, {
+        baseUrl: baseUrl,
         userAgent: `actions-checkout-tracepoint/1.0 (code=STALE_MERGE;owner=${repositoryOwner};repo=${repositoryName};pr=${fromPayload(
           'number'
         )};run_id=${
@@ -253,7 +256,9 @@ export async function checkCommitInfo(
       await octokit.repos.get({owner: repositoryOwner, repo: repositoryName})
     }
   } catch (err) {
-    core.debug(`Error when validating commit info: ${err.stack}`)
+    core.debug(
+      `Error when validating commit info: ${(err as any)?.stack ?? err}`
+    )
   }
 }
 
@@ -273,11 +278,4 @@ function select(obj: any, path: string): any {
 
   const key = path.substr(0, i)
   return select(obj[key], path.substr(i + 1))
-}
-
-function isGhes(): boolean {
-  const ghUrl = new URL(
-    process.env['GITHUB_SERVER_URL'] || 'https://github.com'
-  )
-  return ghUrl.hostname.toUpperCase() !== 'GITHUB.COM'
 }

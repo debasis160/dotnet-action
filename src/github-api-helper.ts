@@ -1,13 +1,12 @@
 import * as assert from 'assert'
 import * as core from '@actions/core'
 import * as fs from 'fs'
-import * as github from '@actions/github'
 import * as io from '@actions/io'
 import * as path from 'path'
 import * as retryHelper from './retry-helper'
 import * as toolCache from '@actions/tool-cache'
 import {default as uuid} from 'uuid/v4'
-import {Octokit} from '@octokit/rest'
+import {getOctokit, Octokit} from './octokit-provider'
 
 const IS_WINDOWS = process.platform === 'win32'
 
@@ -17,18 +16,19 @@ export async function downloadRepository(
   repo: string,
   ref: string,
   commit: string,
-  repositoryPath: string
+  repositoryPath: string,
+  baseUrl?: string
 ): Promise<void> {
   // Determine the default branch
   if (!ref && !commit) {
     core.info('Determining the default branch')
-    ref = await getDefaultBranch(authToken, owner, repo)
+    ref = await getDefaultBranch(authToken, owner, repo, baseUrl)
   }
 
   // Download the archive
   let archiveData = await retryHelper.execute(async () => {
     core.info('Downloading the archive')
-    return await downloadArchive(authToken, owner, repo, ref, commit)
+    return await downloadArchive(authToken, owner, repo, ref, commit, baseUrl)
   })
 
   // Write archive to disk
@@ -47,7 +47,7 @@ export async function downloadRepository(
   } else {
     await toolCache.extractTar(archivePath, extractPath)
   }
-  io.rmRF(archivePath)
+  await io.rmRF(archivePath)
 
   // Determine the path of the repository content. The archive contains
   // a top-level folder and the repository content is inside.
@@ -70,7 +70,7 @@ export async function downloadRepository(
       await io.mv(sourcePath, targetPath)
     }
   }
-  io.rmRF(extractPath)
+  await io.rmRF(extractPath)
 }
 
 /**
@@ -79,11 +79,12 @@ export async function downloadRepository(
 export async function getDefaultBranch(
   authToken: string,
   owner: string,
-  repo: string
+  repo: string,
+  baseUrl?: string
 ): Promise<string> {
   return await retryHelper.execute(async () => {
     core.info('Retrieving the default branch name')
-    const octokit = new github.GitHub(authToken)
+    const octokit = getOctokit(authToken, {baseUrl: baseUrl})
     let result: string
     try {
       // Get the default branch from the repo info
@@ -92,7 +93,10 @@ export async function getDefaultBranch(
       assert.ok(result, 'default_branch cannot be empty')
     } catch (err) {
       // Handle .wiki repo
-      if (err['status'] === 404 && repo.toUpperCase().endsWith('.WIKI')) {
+      if (
+        (err as any)?.status === 404 &&
+        repo.toUpperCase().endsWith('.WIKI')
+      ) {
         result = 'master'
       }
       // Otherwise error
@@ -118,9 +122,10 @@ async function downloadArchive(
   owner: string,
   repo: string,
   ref: string,
-  commit: string
+  commit: string,
+  baseUrl?: string
 ): Promise<Buffer> {
-  const octokit = new github.GitHub(authToken)
+  const octokit = getOctokit(authToken, {baseUrl: baseUrl})
   const params: Octokit.ReposGetArchiveLinkParams = {
     owner: owner,
     repo: repo,
